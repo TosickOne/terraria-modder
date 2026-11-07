@@ -76,6 +76,7 @@ h2{font-size:16px;font-weight:800;margin:8px 0 0}
 <main>
   <header>
     <h1>Verificador de Precios<small id="status">cargando…</small></h1>
+    <button class="btn" id="undoBtn" hidden></button>
     <nav role="tablist">
       <button role="tab" data-tab="buscar" aria-selected="true">Escanear</button>
       <button role="tab" data-tab="registrar" aria-selected="false">Registrar</button>
@@ -190,14 +191,27 @@ async function initStore(){
   const user = await window.claude.use("user").catch(() => null);
   if (user && user.can && user.can("data.write") === false) { readOnly = true; $("tab-registrar").querySelector("form").inert = true; $("regInfo").textContent = "Solo lectura: no tenés permiso para editar."; }
 }
-async function put(item){
-  const k = keyOf(item.code);
-  if (db) await db.collection("productos").doc(k).set(item); else { items.set(k,item); saveLocal(); render(); }
+async function write(k, v){
+  if (db) { const d = db.collection("productos").doc(k); await (v ? d.set(v) : d.delete()); }
+  else { v ? items.set(k, v) : items.delete(k); saveLocal(); render(); }
 }
-async function del(code){
-  const k = keyOf(code);
-  if (db) await db.collection("productos").doc(k).delete(); else { items.delete(k); saveLocal(); render(); }
+/* ---------- undo: each step holds the previous value of every product it touched ---------- */
+// shortcut: history lives in memory and is lost on reload; persist it if people need to undo across sessions.
+const undoStack = []; let undoGroup = null;
+function remember(k, label){
+  const entry = {k, before: items.has(k) ? {...items.get(k)} : null};
+  if (undoGroup) return undoGroup.entries.push(entry);
+  undoStack.push({label, entries: [entry]}); if (undoStack.length > 30) undoStack.shift(); syncUndo();
 }
+function syncUndo(){ const s = undoStack.at(-1); $("undoBtn").hidden = !s; if (s) $("undoBtn").textContent = "↶ Deshacer: " + s.label; }
+$("undoBtn").onclick = async () => {
+  const s = undoStack.pop(); if (!s) return; $("undoBtn").disabled = true;
+  try { for (const e of s.entries.reverse()) await write(e.k, e.before); toast("Deshecho: " + s.label); }
+  catch (err) { undoStack.push(s); toast("No se pudo deshacer (" + (err.code || err.message) + ")"); }
+  $("undoBtn").disabled = false; syncUndo(); refreshResult(); syncReg(); if (!$("tab-caja").hidden) renderCaja();
+};
+async function put(item){ const k = keyOf(item.code); remember(k, "guardar " + item.name); await write(k, item); }
+async function del(code){ const k = keyOf(code); remember(k, "eliminar " + (items.get(k)?.name || code)); await write(k, null); }
 
 /* ---------- barcode decoding: native BarcodeDetector (fast), ZXing fallback loaded on demand ---------- */
 let detector = null, zx = null;
@@ -441,6 +455,7 @@ function renderDiff(lines){
   const btn = document.createElement("button"); btn.className = "btn primary"; btn.textContent = "Aplicar seleccionados";
   btn.onclick = async () => {
     btn.disabled = true; let n = 0;
+    undoGroup = {label: "", entries: []}; // the whole correction undoes as one step
     try {
       for (const r of [...changed, ...missing]) {
         if (!r.cb?.checked) continue;
@@ -450,6 +465,7 @@ function renderDiff(lines){
       }
       toast(`${n} productos actualizados`); out.innerHTML = ""; valPhotos = []; syncVal();
     } catch (err) { toast(`Se guardaron ${n}; falló el resto (${err.code || err.message})`); btn.disabled = false; }
+    finally { if (undoGroup.entries.length) { undoGroup.label = `corrección de ${n} producto${n === 1 ? "" : "s"}`; undoStack.push(undoGroup); } undoGroup = null; syncUndo(); }
   };
   out.append(btn);
 }
