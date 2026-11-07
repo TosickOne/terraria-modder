@@ -326,7 +326,7 @@ $("clearBtn").onclick = () => { $("regForm").reset(); syncReg(); $("fCode").focu
 $("regForm").onsubmit = async e => {
   e.preventDefault();
   const price = Number($("fPrice").value.replace(/[₡\s]/g, "").replace(",", "."));
-  if (!(price >= 0)) return toast("Precio inválido");
+  if (!(price > 0)) return toast("El precio tiene que ser mayor que 0");
   const tipo = $("fTipo").value.trim(); const t = tipos().find(x => x.toLowerCase() === tipo.toLowerCase()); // reuse existing spelling
   const item = {code: $("fCode").value.trim(), name: $("fName").value.trim().toUpperCase(), tipo: t || tipo, price, updatedAt: new Date().toISOString()};
   try { await put(item); toast("Guardado: " + fmt(price)); shown = item.code; refreshResult(); $("regForm").reset(); syncReg(); $("fCode").focus(); }
@@ -406,6 +406,18 @@ function syncVal(){ $("valRun").hidden = $("valClear").hidden = !valPhotos.lengt
 $("valBtn").onclick = () => $("valIn").click();
 $("valIn").onchange = e => { valPhotos.push(...e.target.files); e.target.value = ""; syncVal(); };
 $("valClear").onclick = () => { valPhotos = []; syncVal(); $("valOut").innerHTML = ""; };
+/* ---------- verifiers for what Claude read off the monitor ---------- */
+const BIG_CHANGE = 0.5; // a jump over 50% is more likely a misread than a real price change: shown unticked
+// GTIN check digit (EAN-8, UPC-A, EAN-13, GTIN-14); other codes (SKUs, PLUs) can't be checked and pass.
+const gtinOk = c => { c = String(c); if (!/^(\d{8}|\d{12,14})$/.test(c)) return true; const d = [...c].map(Number), chk = d.pop(); return (10 - d.reverse().reduce((s, x, i) => s + x * (i % 2 ? 1 : 3), 0) % 10) % 10 === chk; };
+console.assert(gtinOk("038100171207") && gtinOk("7445341000754") && !gtinOk("7445341000755") && gtinOk("NW003"), "gtinOk");
+function lineIssue(l, it, price){
+  // Anything on the POS screen is registered and priced, so 0 or a missing price is always a misread.
+  if (!(price > 0)) return "Precio en 0 o ilegible: en caja ningún producto vale 0. Tomá otra foto más cerca.";
+  if (!Number.isInteger(price * 100)) return "Precio con decimales raros: probablemente mal leído.";
+  if (l.codigo && !it && !gtinOk(l.codigo)) return "Código mal leído (no cumple el dígito verificador).";
+  return "";
+}
 // Match a POS line to our list: by code first; by name only when it is unambiguous.
 function matchLine(l){
   if (l.codigo) { const it = items.get(keyOf(l.codigo)); if (it) return it; }
@@ -416,7 +428,7 @@ function matchLine(l){
 $("valRun").onclick = async () => {
   const out = $("valOut"); out.innerHTML = '<p class="hint">Claude está leyendo las fotos…</p>'; $("valRun").disabled = true;
   try {
-    const lines = await sample.json('Estas fotos son de la pantalla de una caja registradora de supermercado (Costa Rica) con productos escaneados. Puede haber varias fotos de la misma pantalla con líneas repetidas: incluí cada producto una sola vez. Devolvé SOLO un arreglo JSON de objetos {"codigo": string, "descripcion": string, "precio": number}: "codigo" es el código de barras/PLU tal como aparece (solo dígitos o letras, "" si no se ve), "precio" es el precio UNITARIO en colones sin símbolo ni separadores (si una línea muestra cantidad x precio, usá el unitario). Ignorá subtotales, impuestos, descuentos y totales.', {images: valPhotos, modelTier: "default"});
+    const lines = await sample.json('Estas fotos son de la pantalla de una caja registradora de supermercado (Costa Rica) con productos escaneados. Puede haber varias fotos de la misma pantalla con líneas repetidas: incluí cada producto una sola vez. Devolvé SOLO un arreglo JSON de objetos {"codigo": string, "descripcion": string, "precio": number}: "codigo" es el código de barras/PLU tal como aparece (solo dígitos o letras, "" si no se ve), "precio" es el precio UNITARIO en colones sin símbolo ni separadores (si una línea muestra cantidad x precio, usá el unitario). Ignorá subtotales, impuestos, descuentos y totales. Ningún producto en pantalla tiene precio 0: si no podés leer un precio o un código con certeza, poné null en ese campo en vez de adivinar.', {images: valPhotos, modelTier: "default"});
     if (!Array.isArray(lines)) throw {message: "respuesta inválida"};
     renderDiff(lines);
   } catch (e) { out.innerHTML = ""; toast(e.code === "not_granted" ? "Permiso denegado para la IA" : "No se pudieron leer las fotos (" + (e.code || e.message) + ")"); }
@@ -424,30 +436,38 @@ $("valRun").onclick = async () => {
 };
 function renderDiff(lines){
   const out = $("valOut"); out.innerHTML = "";
-  const rows = lines.map(l => ({l, it: matchLine(l), price: Number(l.precio)})).filter(r => r.price >= 0 || r.it);
-  const changed = rows.filter(r => r.it && r.price >= 0 && r.price !== Number(r.it.price));
-  const same = rows.filter(r => r.it && r.price === Number(r.it.price));
-  const missing = rows.filter(r => !r.it);
+  const rows = lines.map(l => {
+    const it = matchLine(l), price = Number(l.precio);
+    return {l, it, price, issue: lineIssue(l, it, price), big: it && price > 0 && Math.abs(price - it.price) / it.price > BIG_CHANGE};
+  }).filter(r => r.it || r.l.codigo || r.price > 0); // drop junk lines (totals, headers) with nothing to act on
+  const doubtful = rows.filter(r => r.issue);
+  const ok = rows.filter(r => !r.issue);
+  const changed = ok.filter(r => r.it && r.price !== Number(r.it.price));
+  const same = ok.filter(r => r.it && r.price === Number(r.it.price));
+  const missing = ok.filter(r => !r.it);
   const p = document.createElement("p"); p.className = "hint";
-  p.textContent = `${rows.length} líneas leídas: ${changed.length} con precio distinto, ${same.length} correctas, ${missing.length} sin coincidencia en la lista.`;
+  p.textContent = `${rows.length} líneas leídas: ${changed.length} con precio distinto, ${same.length} correctas, ${missing.length} sin coincidencia, ${doubtful.length} dudosas.`;
   out.append(p);
   const table = (title, list, kind) => {
     if (!list.length) return;
     const h = document.createElement("h2"); h.textContent = title; out.append(h);
     const wrap = document.createElement("div"); wrap.className = "diff";
     const t = document.createElement("table");
-    t.innerHTML = kind === "chg" ? "<tr><th></th><th>Producto</th><th>Lista</th><th>Caja</th></tr>" : kind === "new" ? "<tr><th></th><th>Producto en caja</th><th>Caja</th></tr>" : "<tr><th>Producto</th><th>Precio</th></tr>";
+    t.innerHTML = kind === "chg" ? "<tr><th></th><th>Producto</th><th>Lista</th><th>Caja</th></tr>" : kind === "new" ? "<tr><th></th><th>Producto en caja</th><th>Caja</th></tr>" : kind === "bad" ? "<tr><th>Producto · motivo</th><th>Leído</th></tr>" : "<tr><th>Producto</th><th>Precio</th></tr>";
     for (const r of list) {
       const tr = t.insertRow();
-      if (kind !== "ok") { const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = kind === "chg"; cb.disabled = kind === "new" && !r.l.codigo; cb.setAttribute("aria-label", "Aplicar"); r.cb = cb; tr.insertCell().append(cb); }
+      if (kind === "chg" || kind === "new") { const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = kind === "chg" && !r.big; cb.disabled = kind === "new" && !r.l.codigo; cb.setAttribute("aria-label", "Aplicar"); r.cb = cb; tr.insertCell().append(cb); }
       const c = tr.insertCell(); const nm = document.createElement("div"); nm.textContent = r.it?.name || r.l.descripcion || "(sin descripción)";
       const cd = document.createElement("div"); cd.className = "cd"; cd.textContent = r.it?.code || r.l.codigo || "sin código"; c.append(nm, cd);
+      const why = kind === "bad" ? r.issue : kind === "chg" && r.big ? `Cambio de más del ${BIG_CHANGE * 100}%: revisá antes de marcar` : "";
+      if (why) { const w = document.createElement("div"); w.className = "warn"; w.style.fontSize = "13px"; w.textContent = "⚠ " + why; c.append(w); }
       if (kind === "chg") { const a = tr.insertCell(); a.className = "num"; a.textContent = fmt(r.it.price); }
-      const b = tr.insertCell(); b.className = "num"; b.textContent = fmt(kind === "ok" ? r.it.price : r.price);
+      const b = tr.insertCell(); b.className = "num"; b.textContent = kind === "bad" ? (r.price > 0 ? fmt(r.price) : String(r.l.precio ?? "—")) : fmt(kind === "ok" ? r.it.price : r.price);
       if (kind === "chg") b.classList.add(r.price > r.it.price ? "bad" : "ok");
     }
     wrap.append(t); out.append(wrap);
   };
+  table("Lecturas dudosas (no se aplican)", doubtful, "bad");
   table("Precios a corregir", changed, "chg");
   table("No están en la lista", missing, "new");
   table("Correctos", same, "ok");
