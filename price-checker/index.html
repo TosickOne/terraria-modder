@@ -23,7 +23,7 @@ main{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
 header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:12px 8px;display:flex;flex-direction:column;gap:10px}
 h1{font-size:20px;font-weight:800;margin:0;letter-spacing:-.01em}
 h1 small{font-weight:400;color:var(--muted);font-size:13px;margin-left:6px}
-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px}
+nav{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px}
 nav button{border:0;background:none;color:var(--fg);font:600 14px var(--display);padding:10px 4px;border-radius:7px;cursor:pointer}
 nav button[aria-selected="true"]{background:var(--accent);color:var(--accent-fg)}
 section{display:flex;flex-direction:column;gap:12px}
@@ -54,6 +54,21 @@ ul.list li:first-child{border-top:0}
 ul.list .nm{font-weight:600;min-width:0;overflow-wrap:anywhere}
 ul.list .pr{font-weight:800;font-variant-numeric:tabular-nums;grid-row:span 2;align-self:center}
 ul.list .cd{font-family:var(--mono);font-size:12px;color:var(--muted)}
+ul.list li.grp{display:block;cursor:default;background:var(--bg);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);padding:8px 14px}
+/* The POS scanner reads the screen: always black on white, whatever the theme */
+.code-box{background:#fff;border-radius:12px;padding:16px;display:flex;justify-content:center;align-items:center;min-height:180px}
+.code-box svg{max-width:100%;height:auto;display:block}
+.code-box.qr svg{width:min(260px,100%)}
+.step{display:flex;align-items:center;justify-content:space-between;gap:8px;font-variant-numeric:tabular-nums}
+.seg{display:flex;gap:4px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.diff{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.diff table{border-collapse:collapse;width:100%;font-size:14px}
+.diff td,.diff th{padding:8px 10px;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+.diff th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-top:0}
+.diff td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.diff .cd{font-family:var(--mono);font-size:12px;color:var(--muted)}
+h2{font-size:16px;font-weight:800;margin:8px 0 0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:9px;font-weight:600;z-index:20}
 @media (prefers-reduced-motion:no-preference){.tag.flash{animation:fl .4s}@keyframes fl{from{transform:scale(.97)}}}
 </style>
@@ -65,6 +80,7 @@ ul.list .cd{font-family:var(--mono);font-size:12px;color:var(--muted)}
       <button role="tab" data-tab="buscar" aria-selected="true">Escanear</button>
       <button role="tab" data-tab="registrar" aria-selected="false">Registrar</button>
       <button role="tab" data-tab="lista" aria-selected="false">Lista</button>
+      <button role="tab" data-tab="caja" aria-selected="false">Caja</button>
     </nav>
   </header>
 
@@ -95,6 +111,8 @@ ul.list .cd{font-family:var(--mono);font-size:12px;color:var(--muted)}
     <form id="regForm" class="tag">
       <label>Código<input id="fCode" class="code" required autocomplete="off" placeholder="038100171207"></label>
       <label>Descripción<input id="fName" required autocomplete="off" placeholder="SNACK BEGGINS BACON/CHEESE 170G"></label>
+      <label>Tipo de producto<input id="fTipo" list="tipos" autocomplete="off" placeholder="Mascotas"></label>
+      <datalist id="tipos"></datalist>
       <label>Precio (₡)<input id="fPrice" required inputmode="decimal" autocomplete="off" placeholder="1875"></label>
       <p class="hint" id="regInfo"></p>
       <div class="row">
@@ -110,8 +128,41 @@ ul.list .cd{font-family:var(--mono);font-size:12px;color:var(--muted)}
     <p class="hint" id="count"></p>
     <ul class="list" id="list"></ul>
   </section>
+
+  <section id="tab-caja" hidden>
+    <h2>1. Pasar códigos por la caja</h2>
+    <p class="hint">Mostrá cada código al escáner de la caja. Subí el brillo de la pantalla; si el escáner no lee barras en pantalla, probá con QR.</p>
+    <div class="row">
+      <select id="cajaTipo" class="btn" aria-label="Tipo de producto a pasar"></select>
+      <div class="seg" style="flex:0 0 auto">
+        <button class="btn" id="fmtBar" aria-pressed="true">Barras</button>
+        <button class="btn" id="fmtQr" aria-pressed="false">QR</button>
+      </div>
+    </div>
+    <div class="tag">
+      <div class="c"><span id="cajaCode"></span><span id="cajaPos"></span></div>
+      <div class="n" id="cajaName"></div>
+      <div class="code-box" id="cajaBox"></div>
+      <div class="step">
+        <button class="btn" id="prevBtn">← Anterior</button>
+        <button class="btn primary" id="nextBtn">Siguiente →</button>
+      </div>
+    </div>
+
+    <h2>2. Validar con foto del monitor</h2>
+    <p class="hint" id="valHint">Tomá una o varias fotos de la pantalla de la caja con los productos pasados. Claude lee códigos y precios y te muestra las diferencias con la lista antes de corregir.</p>
+    <div class="row">
+      <button class="btn primary" id="valBtn">Foto del monitor</button>
+      <button class="btn" id="valRun" hidden>Validar 0 fotos</button>
+      <button class="btn ghost" id="valClear" hidden>Descartar fotos</button>
+    </div>
+    <div id="valOut"></div>
+  </section>
 </main>
 <input type="file" id="fileIn" accept="image/*" capture="environment" hidden>
+<input type="file" id="valIn" accept="image/*" capture="environment" multiple hidden>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -237,17 +288,18 @@ $("fileIn").onchange = async e => {
 /* ---------- register / edit ---------- */
 function show(tab){
   for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === tab);
-  for (const t of ["buscar","registrar","lista"]) $("tab-" + t).hidden = t !== tab;
+  for (const t of ["buscar","registrar","lista","caja"]) $("tab-" + t).hidden = t !== tab;
+  if (tab === "caja") renderCaja();
   if (stream) stopCam();
   if (tab === "buscar") $("findCode").focus();
 }
 for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.tab);
 function fillCode(code){
   $("fCode").value = code; const it = items.get(keyOf(code));
-  if (it) { $("fName").value = it.name; $("fPrice").value = it.price; }
+  if (it) { $("fName").value = it.name; $("fPrice").value = it.price; $("fTipo").value = it.tipo || ""; }
   syncReg(); $(it ? "fPrice" : "fName").focus();
 }
-function edit(it){ show("registrar"); $("fCode").value = it.code || ""; $("fName").value = it.name || ""; $("fPrice").value = it.price ?? ""; syncReg(); $(it.name ? "fPrice" : "fName").focus(); }
+function edit(it){ show("registrar"); $("fCode").value = it.code || ""; $("fName").value = it.name || ""; $("fTipo").value = it.tipo || ""; $("fPrice").value = it.price ?? ""; syncReg(); $(it.name ? "fPrice" : "fName").focus(); }
 function syncReg(){
   if (readOnly) return;
   const it = items.get(keyOf($("fCode").value || " "));
@@ -261,7 +313,8 @@ $("regForm").onsubmit = async e => {
   e.preventDefault();
   const price = Number($("fPrice").value.replace(/[₡\s]/g, "").replace(",", "."));
   if (!(price >= 0)) return toast("Precio inválido");
-  const item = {code: $("fCode").value.trim(), name: $("fName").value.trim().toUpperCase(), price, updatedAt: new Date().toISOString()};
+  const tipo = $("fTipo").value.trim(); const t = tipos().find(x => x.toLowerCase() === tipo.toLowerCase()); // reuse existing spelling
+  const item = {code: $("fCode").value.trim(), name: $("fName").value.trim().toUpperCase(), tipo: t || tipo, price, updatedAt: new Date().toISOString()};
   try { await put(item); toast("Guardado: " + fmt(price)); shown = item.code; refreshResult(); $("regForm").reset(); syncReg(); $("fCode").focus(); }
   catch (err) { toast("No se pudo guardar (" + (err.code || err.message) + ")"); }
 };
@@ -276,8 +329,9 @@ let sample = null;
 async function readLabel(file){
   toast("Leyendo etiqueta…");
   try {
-    const r = await sample.json('Esta foto es una etiqueta de precio de góndola de supermercado (Costa Rica). Devolvé SOLO JSON {"codigo": string, "descripcion": string, "precio": number}. "codigo" es el número de código de barras impreso (dígitos), "precio" el precio en colones sin símbolo. Si un campo no se ve, usá "".', {images: [file], modelTier: "quick"});
+    const r = await sample.json('Esta foto es una etiqueta de precio de góndola de supermercado (Costa Rica). Devolvé SOLO JSON {"codigo": string, "descripcion": string, "precio": number, "tipo": string}. "codigo" es el número de código de barras impreso (dígitos), "precio" el precio en colones sin símbolo, "tipo" la categoría general del producto en español (preferí una de estas si encaja: ' + (tipos().join(", ") || "Mascotas, Bebidas, Snacks, Limpieza, Abarrotes") + '). Si un campo no se ve, usá "".', {images: [file], modelTier: "quick"});
     if (r.codigo) $("fCode").value = String(r.codigo);
+    if (r.tipo && !$("fTipo").value) $("fTipo").value = r.tipo;
     if (r.descripcion) $("fName").value = String(r.descripcion).toUpperCase();
     if (r.precio !== "" && r.precio != null) $("fPrice").value = r.precio;
     syncReg(); toast("Revisá los datos y guardá");
@@ -288,10 +342,12 @@ $("aiBtn").onclick = () => { photoTarget = "ai"; $("fileIn").click(); };
 /* ---------- list ---------- */
 function render(){
   const q = $("filter").value.trim().toUpperCase(); const ul = $("list"); ul.innerHTML = "";
-  const all = [...items.values()].sort((a,b) => a.name.localeCompare(b.name));
-  const rows = q ? all.filter(it => it.name.includes(q) || String(it.code).includes(q)) : all;
+  const rows = sorted().filter(it => !q || it.name.includes(q) || String(it.code).includes(q) || tipoOf(it).toUpperCase().includes(q));
   $("count").textContent = items.size ? `${rows.length} de ${items.size} productos` : "Todavía no hay productos. Registrá el primero en «Registrar».";
+  $("tipos").innerHTML = ""; for (const t of tipos()) $("tipos").append(new Option(t));
+  let grp = null;
   for (const it of rows.slice(0, 300)) {
+    if (tipoOf(it) !== grp) { grp = tipoOf(it); const h = document.createElement("li"); h.className = "grp"; h.textContent = grp; ul.append(h); }
     const li = document.createElement("li"); li.tabIndex = 0;
     li.innerHTML = '<span class="nm"></span><span class="pr"></span><span class="cd"></span>';
     li.children[0].textContent = it.name; li.children[1].textContent = fmt(it.price); li.children[2].textContent = it.code;
@@ -300,11 +356,110 @@ function render(){
   }
 }
 $("filter").oninput = render;
+const tipoOf = it => it.tipo || "Sin tipo";
+const tipos = () => [...new Set([...items.values()].map(it => it.tipo).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+const sorted = () => [...items.values()].sort((a,b) => (a.tipo ? 0 : 1) - (b.tipo ? 0 : 1) || tipoOf(a).localeCompare(tipoOf(b)) || a.name.localeCompare(b.name));
+
+/* ---------- caja: show each code for the POS scanner ---------- */
+let cajaIdx = 0, cajaFmt = "bar";
+const cajaItems = () => { const t = $("cajaTipo").value; return sorted().filter(it => !t || tipoOf(it) === t); };
+function renderCaja(){
+  const sel = $("cajaTipo"), cur = sel.value; sel.innerHTML = "";
+  sel.append(new Option(`Todos (${items.size})`, ""));
+  for (const t of new Set(sorted().map(tipoOf))) sel.append(new Option(`${t} (${sorted().filter(i => tipoOf(i) === t).length})`, t));
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : "";
+  const list = cajaItems(); cajaIdx = Math.max(0, Math.min(cajaIdx, list.length - 1));
+  const it = list[cajaIdx], box = $("cajaBox"); box.innerHTML = ""; box.className = "code-box" + (cajaFmt === "qr" ? " qr" : "");
+  $("cajaPos").textContent = list.length ? `${cajaIdx + 1} / ${list.length}` : "";
+  $("cajaCode").textContent = it?.code || ""; $("cajaName").textContent = it ? `${it.name} · ${fmt(it.price)}` : "No hay productos para pasar.";
+  $("prevBtn").disabled = cajaIdx <= 0; $("nextBtn").disabled = cajaIdx >= list.length - 1;
+  if (!it) return;
+  const code = String(it.code).trim();
+  if (cajaFmt === "qr") { const q = qrcode(0, "M"); q.addData(code); q.make(); box.innerHTML = q.createSvgTag({cellSize: 8, margin: 2, scalable: true}); return; }
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); box.append(svg);
+  // Retail formats first so the POS reads the same symbology as the package; CODE128 for anything else (SKUs like NW003).
+  const formats = {12: "UPC", 13: "EAN13", 8: "EAN8"}[code.length] && /^\d+$/.test(code) ? [{12: "UPC", 13: "EAN13", 8: "EAN8"}[code.length], "CODE128"] : ["CODE128"];
+  for (const format of formats) { let ok = true; JsBarcode(svg, code, {format, width: 3, height: 130, fontSize: 20, margin: 16, background: "#ffffff", lineColor: "#000000", valid: v => ok = v}); if (ok) break; }
+}
+$("cajaTipo").onchange = () => { cajaIdx = 0; renderCaja(); };
+$("prevBtn").onclick = () => { cajaIdx--; renderCaja(); };
+$("nextBtn").onclick = () => { cajaIdx++; renderCaja(); };
+$("fmtBar").onclick = $("fmtQr").onclick = e => { cajaFmt = e.target.id === "fmtQr" ? "qr" : "bar"; $("fmtBar").setAttribute("aria-pressed", cajaFmt === "bar"); $("fmtQr").setAttribute("aria-pressed", cajaFmt === "qr"); renderCaja(); };
+
+/* ---------- validate against photos of the POS monitor ---------- */
+let valPhotos = [];
+function syncVal(){ $("valRun").hidden = $("valClear").hidden = !valPhotos.length; $("valRun").textContent = `Validar ${valPhotos.length} foto${valPhotos.length === 1 ? "" : "s"}`; $("valBtn").textContent = valPhotos.length ? "Agregar otra foto" : "Foto del monitor"; }
+$("valBtn").onclick = () => $("valIn").click();
+$("valIn").onchange = e => { valPhotos.push(...e.target.files); e.target.value = ""; syncVal(); };
+$("valClear").onclick = () => { valPhotos = []; syncVal(); $("valOut").innerHTML = ""; };
+// Match a POS line to our list: by code first; by name only when it is unambiguous.
+function matchLine(l){
+  if (l.codigo) { const it = items.get(keyOf(l.codigo)); if (it) return it; }
+  const n = String(l.descripcion || "").toUpperCase().replace(/\s+/g, " ").trim(); if (n.length < 4) return null;
+  const hits = [...items.values()].filter(it => it.name.includes(n) || n.includes(it.name));
+  return hits.length === 1 ? hits[0] : null;
+}
+$("valRun").onclick = async () => {
+  const out = $("valOut"); out.innerHTML = '<p class="hint">Claude está leyendo las fotos…</p>'; $("valRun").disabled = true;
+  try {
+    const lines = await sample.json('Estas fotos son de la pantalla de una caja registradora de supermercado (Costa Rica) con productos escaneados. Puede haber varias fotos de la misma pantalla con líneas repetidas: incluí cada producto una sola vez. Devolvé SOLO un arreglo JSON de objetos {"codigo": string, "descripcion": string, "precio": number}: "codigo" es el código de barras/PLU tal como aparece (solo dígitos o letras, "" si no se ve), "precio" es el precio UNITARIO en colones sin símbolo ni separadores (si una línea muestra cantidad x precio, usá el unitario). Ignorá subtotales, impuestos, descuentos y totales.', {images: valPhotos, modelTier: "default"});
+    if (!Array.isArray(lines)) throw {message: "respuesta inválida"};
+    renderDiff(lines);
+  } catch (e) { out.innerHTML = ""; toast(e.code === "not_granted" ? "Permiso denegado para la IA" : "No se pudieron leer las fotos (" + (e.code || e.message) + ")"); }
+  $("valRun").disabled = false;
+};
+function renderDiff(lines){
+  const out = $("valOut"); out.innerHTML = "";
+  const rows = lines.map(l => ({l, it: matchLine(l), price: Number(l.precio)})).filter(r => r.price >= 0 || r.it);
+  const changed = rows.filter(r => r.it && r.price >= 0 && r.price !== Number(r.it.price));
+  const same = rows.filter(r => r.it && r.price === Number(r.it.price));
+  const missing = rows.filter(r => !r.it);
+  const p = document.createElement("p"); p.className = "hint";
+  p.textContent = `${rows.length} líneas leídas: ${changed.length} con precio distinto, ${same.length} correctas, ${missing.length} sin coincidencia en la lista.`;
+  out.append(p);
+  const table = (title, list, kind) => {
+    if (!list.length) return;
+    const h = document.createElement("h2"); h.textContent = title; out.append(h);
+    const wrap = document.createElement("div"); wrap.className = "diff";
+    const t = document.createElement("table");
+    t.innerHTML = kind === "chg" ? "<tr><th></th><th>Producto</th><th>Lista</th><th>Caja</th></tr>" : kind === "new" ? "<tr><th></th><th>Producto en caja</th><th>Caja</th></tr>" : "<tr><th>Producto</th><th>Precio</th></tr>";
+    for (const r of list) {
+      const tr = t.insertRow();
+      if (kind !== "ok") { const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = kind === "chg"; cb.disabled = kind === "new" && !r.l.codigo; cb.setAttribute("aria-label", "Aplicar"); r.cb = cb; tr.insertCell().append(cb); }
+      const c = tr.insertCell(); const nm = document.createElement("div"); nm.textContent = r.it?.name || r.l.descripcion || "(sin descripción)";
+      const cd = document.createElement("div"); cd.className = "cd"; cd.textContent = r.it?.code || r.l.codigo || "sin código"; c.append(nm, cd);
+      if (kind === "chg") { const a = tr.insertCell(); a.className = "num"; a.textContent = fmt(r.it.price); }
+      const b = tr.insertCell(); b.className = "num"; b.textContent = fmt(kind === "ok" ? r.it.price : r.price);
+      if (kind === "chg") b.classList.add(r.price > r.it.price ? "bad" : "ok");
+    }
+    wrap.append(t); out.append(wrap);
+  };
+  table("Precios a corregir", changed, "chg");
+  table("No están en la lista", missing, "new");
+  table("Correctos", same, "ok");
+  if (!changed.length && !missing.some(r => r.l.codigo)) return;
+  const btn = document.createElement("button"); btn.className = "btn primary"; btn.textContent = "Aplicar seleccionados";
+  btn.onclick = async () => {
+    btn.disabled = true; let n = 0;
+    try {
+      for (const r of [...changed, ...missing]) {
+        if (!r.cb?.checked) continue;
+        const now = new Date().toISOString();
+        await put(r.it ? {...r.it, price: r.price, updatedAt: now} : {code: String(r.l.codigo), name: String(r.l.descripcion || r.l.codigo).toUpperCase(), tipo: "", price: r.price, updatedAt: now});
+        n++;
+      }
+      toast(`${n} productos actualizados`); out.innerHTML = ""; valPhotos = []; syncVal();
+    } catch (err) { toast(`Se guardaron ${n}; falló el resto (${err.code || err.message})`); btn.disabled = false; }
+  };
+  out.append(btn);
+}
 
 refreshResult();
 initStore();
 (async () => {
   sample = window.claude?.use ? await window.claude.use("sample").catch(() => null) : null;
-  if (sample && (await sample.limits().catch(() => ({}))).images) $("aiBtn").hidden = false;
+  const ai = sample && (await sample.limits().catch(() => ({}))).images;
+  $("aiBtn").hidden = !ai; $("valBtn").disabled = !ai;
+  if (!ai) $("valHint").textContent = "La validación con foto necesita abrir la app en claude.ai y permitir que use a Claude.";
 })();
 </script>
