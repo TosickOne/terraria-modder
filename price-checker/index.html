@@ -1,0 +1,310 @@
+<title>Verificador de Precios</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow column, sticky tab bar, the shelf label (white card, huge black price) is the hero of every result */
+:root{
+  --bg:#eef0ec; --surface:#ffffff; --fg:#17201b; --muted:#5c6862; --line:#d5dad4;
+  --accent:#0d6b4f; --accent-fg:#ffffff; --warn:#b4560b; --bad:#b3261e; --ok:#1d7a3e;
+  --display:"Archivo",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121614; --surface:#1c221f; --fg:#e8ede9; --muted:#9aa69f; --line:#2f3833;
+  --accent:#3fbf93; --accent-fg:#06140e; --warn:#f0a050; --bad:#ff8a80; --ok:#6fd38f; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121614; --surface:#1c221f; --fg:#e8ede9; --muted:#9aa69f; --line:#2f3833;
+  --accent:#3fbf93; --accent-fg:#06140e; --warn:#f0a050; --bad:#ff8a80; --ok:#6fd38f; color-scheme:dark}
+[hidden]{display:none!important}
+html,body{background:var(--bg);color:var(--fg)}
+body{font-family:var(--display);font-size:15px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 32px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+main{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:12px 8px;display:flex;flex-direction:column;gap:10px}
+h1{font-size:20px;font-weight:800;margin:0;letter-spacing:-.01em}
+h1 small{font-weight:400;color:var(--muted);font-size:13px;margin-left:6px}
+nav{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px}
+nav button{border:0;background:none;color:var(--fg);font:600 14px var(--display);padding:10px 4px;border-radius:7px;cursor:pointer}
+nav button[aria-selected="true"]{background:var(--accent);color:var(--accent-fg)}
+section{display:flex;flex-direction:column;gap:12px}
+.scan{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;max-width:100%}
+.scan video{width:100%;height:100%;object-fit:cover;display:block}
+.scan .aim{position:absolute;left:12%;right:12%;top:38%;bottom:38%;border:2px solid #ffffffcc;border-radius:8px;box-shadow:0 0 0 999px #0006}
+.scan .msg{position:absolute;inset:auto 0 0;padding:8px 12px;color:#fff;font-size:13px;background:#0008}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row>*{flex:1 1 auto}
+input,button.btn{font:inherit;font-size:16px;border-radius:9px;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--fg);min-width:0}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input.code{font-family:var(--mono);letter-spacing:.04em}
+button.btn{cursor:pointer;font-weight:600}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+button.danger{color:var(--bad);border-color:var(--bad)}
+button.ghost{background:none}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.tag{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:6px}
+.tag .c{font-family:var(--mono);font-size:13px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.tag .n{font-weight:800;font-size:18px;text-transform:uppercase;line-height:1.2}
+.tag .p{font-weight:800;font-size:56px;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 8px;border-radius:99px;border:1px solid currentColor}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+.hint{color:var(--muted);font-size:13px;margin:0}
+ul.list{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+ul.list li{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:10px 14px;border-top:1px solid var(--line);cursor:pointer}
+ul.list li:first-child{border-top:0}
+ul.list .nm{font-weight:600;min-width:0;overflow-wrap:anywhere}
+ul.list .pr{font-weight:800;font-variant-numeric:tabular-nums;grid-row:span 2;align-self:center}
+ul.list .cd{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:9px;font-weight:600;z-index:20}
+@media (prefers-reduced-motion:no-preference){.tag.flash{animation:fl .4s}@keyframes fl{from{transform:scale(.97)}}}
+</style>
+
+<main>
+  <header>
+    <h1>Verificador de Precios<small id="status">cargando…</small></h1>
+    <nav role="tablist">
+      <button role="tab" data-tab="buscar" aria-selected="true">Escanear</button>
+      <button role="tab" data-tab="registrar" aria-selected="false">Registrar</button>
+      <button role="tab" data-tab="lista" aria-selected="false">Lista</button>
+    </nav>
+  </header>
+
+  <!-- Shared scanner: moved into whichever tab is open -->
+  <div id="scanner" class="scan" hidden>
+    <video id="video" playsinline muted></video><div class="aim"></div><div class="msg" id="scanMsg">Apuntá al código de barras</div>
+  </div>
+
+  <section id="tab-buscar">
+    <div id="slotBuscar"></div>
+    <div class="row">
+      <button class="btn primary" id="camBtn">Cámara en vivo</button>
+      <button class="btn" id="photoBtn">Foto del código</button>
+    </div>
+    <form id="findForm" class="row">
+      <input id="findCode" class="code" inputmode="numeric" autocomplete="off" placeholder="Código o escáner USB/Bluetooth" aria-label="Código a buscar">
+      <button class="btn" style="flex:0 0 auto">Buscar</button>
+    </form>
+    <div id="result"></div>
+  </section>
+
+  <section id="tab-registrar" hidden>
+    <div id="slotReg"></div>
+    <div class="row">
+      <button class="btn" id="regCamBtn">Escanear código</button>
+      <button class="btn" id="aiBtn" hidden>Leer etiqueta (IA)</button>
+    </div>
+    <form id="regForm" class="tag">
+      <label>Código<input id="fCode" class="code" required autocomplete="off" placeholder="038100171207"></label>
+      <label>Descripción<input id="fName" required autocomplete="off" placeholder="SNACK BEGGINS BACON/CHEESE 170G"></label>
+      <label>Precio (₡)<input id="fPrice" required inputmode="decimal" autocomplete="off" placeholder="1875"></label>
+      <p class="hint" id="regInfo"></p>
+      <div class="row">
+        <button class="btn primary">Guardar</button>
+        <button type="button" class="btn ghost" id="clearBtn">Limpiar</button>
+        <button type="button" class="btn danger" id="delBtn" hidden>Eliminar</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="tab-lista" hidden>
+    <input id="filter" placeholder="Filtrar por nombre o código" aria-label="Filtrar productos">
+    <p class="hint" id="count"></p>
+    <ul class="list" id="list"></ul>
+  </section>
+</main>
+<input type="file" id="fileIn" accept="image/*" capture="environment" hidden>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => "₡" + Number(n).toLocaleString("es-CR", {maximumFractionDigits: 2});
+// UPC-A (12) and EAN-13 with a leading 0 are the same product: strip leading zeros on numeric codes.
+const keyOf = c => { c = String(c).trim().toUpperCase().replace(/\s+/g, ""); return /^\d+$/.test(c) ? (c.replace(/^0+/, "") || "0") : c.replace(/[^A-Z0-9_-]/g, "-"); };
+console.assert(keyOf("038100171207") === keyOf("0038100171207") && keyOf(" nw003 ") === "NW003", "keyOf");
+
+/* ---------- storage: shared db when hosted on claude.ai, localStorage otherwise ---------- */
+const items = new Map(); let db = null; let readOnly = false;
+function toast(t){ const el=$("toast"); el.textContent=t; el.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>el.hidden=true,2200); }
+function local(){ try { return JSON.parse(localStorage.getItem("precios") || "{}"); } catch { return {}; } }
+function saveLocal(){ try { localStorage.setItem("precios", JSON.stringify(Object.fromEntries(items))); } catch {} }
+async function initStore(){
+  db = window.claude?.use ? await window.claude.use("db").catch(() => null) : null;
+  if (!db) { for (const [k,v] of Object.entries(local())) items.set(k,v); $("status").textContent = "guardado en este dispositivo"; render(); return; }
+  const timer = setTimeout(() => $("status").textContent = "sin conexión a los datos", 10000);
+  db.collection("productos").onSnapshot(snap => {
+    clearTimeout(timer); items.clear();
+    for (const d of snap.docs) items.set(d.id, d.data());
+    $("status").textContent = items.size + " productos · compartido";
+    render(); refreshResult();
+  }, e => { clearTimeout(timer); $("status").textContent = "error de datos: " + e.code; });
+  const user = await window.claude.use("user").catch(() => null);
+  if (user && user.can && user.can("data.write") === false) { readOnly = true; $("tab-registrar").querySelector("form").inert = true; $("regInfo").textContent = "Solo lectura: no tenés permiso para editar."; }
+}
+async function put(item){
+  const k = keyOf(item.code);
+  if (db) await db.collection("productos").doc(k).set(item); else { items.set(k,item); saveLocal(); render(); }
+}
+async function del(code){
+  const k = keyOf(code);
+  if (db) await db.collection("productos").doc(k).delete(); else { items.delete(k); saveLocal(); render(); }
+}
+
+/* ---------- barcode decoding: native BarcodeDetector (fast), ZXing fallback loaded on demand ---------- */
+let detector = null, zx = null;
+const FORMATS = ["ean_13","ean_8","upc_a","upc_e","code_128","code_39","itf","qr_code"];
+async function getDetector(){
+  if (detector || zx) return;
+  if ("BarcodeDetector" in window) {
+    try { const ok = await BarcodeDetector.getSupportedFormats(); detector = new BarcodeDetector({formats: FORMATS.filter(f => ok.includes(f))}); return; } catch {}
+  }
+  await new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"; s.onload = res; s.onerror = rej; document.head.append(s); });
+  const hints = new Map([[ZXing.DecodeHintType.TRY_HARDER, true]]);
+  zx = new ZXing.BrowserMultiFormatReader(hints, 150);
+}
+async function decodeImage(file){
+  await getDetector();
+  if (detector) { const bmp = await createImageBitmap(file); const r = await detector.detect(bmp); return r[0]?.rawValue || null; }
+  const url = URL.createObjectURL(file);
+  try { return (await zx.decodeFromImageUrl(url)).getText(); } catch { return null; } finally { URL.revokeObjectURL(url); }
+}
+
+/* ---------- live camera ---------- */
+let stream = null, onCode = null, lastCode = "", lastAt = 0, looping = false;
+function beep(){ try { navigator.vibrate?.(60); const a = beep.a ||= new AudioContext(); const o = a.createOscillator(); o.frequency.value = 1800; o.connect(a.destination); o.start(); o.stop(a.currentTime + .07); } catch {} }
+function hit(code){
+  const now = Date.now();
+  if (code === lastCode && now - lastAt < 2000) return; // same label held in view: don't repeat
+  lastCode = code; lastAt = now; beep(); onCode?.(code);
+}
+async function startCam(slot, handler){
+  onCode = handler; $(slot).append($("scanner"));
+  if (stream) return;
+  $("scanner").hidden = false; $("scanMsg").textContent = "Iniciando cámara…";
+  try {
+    await getDetector();
+    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment", width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+    const v = $("video"); v.srcObject = stream; await v.play();
+    $("scanMsg").textContent = "Apuntá al código de barras";
+    if (detector) { looping = true; (async function loop(){ while (looping) { try { const r = await detector.detect(v); if (r[0]) hit(r[0].rawValue); } catch {} await new Promise(r => setTimeout(r, 60)); } })(); }
+    else zx.decodeFromStream(stream, v, r => r && hit(r.getText()));
+  } catch (e) {
+    stopCam(); toast("Cámara en vivo no disponible aquí. Usá «Foto del código».");
+  }
+  syncCamButtons();
+}
+function stopCam(){
+  looping = false; zx?.reset(); stream?.getTracks().forEach(t => t.stop()); stream = null; $("scanner").hidden = true; syncCamButtons();
+}
+function syncCamButtons(){ $("camBtn").textContent = stream ? "Detener cámara" : "Cámara en vivo"; $("regCamBtn").textContent = stream ? "Detener cámara" : "Escanear código"; }
+
+/* ---------- search ---------- */
+let shown = null;
+function lookup(code){
+  code = String(code).trim(); if (!code) return;
+  shown = code; $("findCode").value = code; refreshResult();
+}
+function refreshResult(){
+  if (!shown) { $("result").innerHTML = '<p class="hint">Escaneá un código con la cámara, tomá una foto, o escribilo. Un lector de códigos USB/Bluetooth también funciona: escaneá con el cursor en la casilla.</p>'; return; }
+  const it = items.get(keyOf(shown)); const r = $("result"); r.innerHTML = "";
+  const card = document.createElement("div"); card.className = "tag flash";
+  if (!it) {
+    card.innerHTML = '<div class="c"><span></span><span class="pill bad">No registrado</span></div><div class="n">Sin precio registrado</div>';
+    card.querySelector(".c span").textContent = shown;
+    const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Registrar este código";
+    b.onclick = () => edit({code: shown}); card.append(b);
+  } else {
+    const days = Math.floor((Date.now() - new Date(it.updatedAt)) / 864e5);
+    card.innerHTML = `<div class="c"><span></span><span class="pill ${days > 30 ? "warn" : "ok"}">${days === 0 ? "actualizado hoy" : "hace " + days + " d"}</span></div><div class="n"></div><div class="p"></div>`;
+    card.querySelector(".c span").textContent = it.code; card.querySelector(".n").textContent = it.name; card.querySelector(".p").textContent = fmt(it.price);
+    const b = document.createElement("button"); b.className = "btn"; b.textContent = "Editar precio"; b.onclick = () => edit(it); card.append(b);
+  }
+  r.append(card);
+}
+$("findForm").onsubmit = e => { e.preventDefault(); lookup($("findCode").value); $("findCode").select(); };
+$("camBtn").onclick = () => stream ? stopCam() : startCam("slotBuscar", lookup);
+
+/* ---------- photo fallback (works everywhere, incl. inside claude.ai) ---------- */
+let photoTarget = null;
+$("photoBtn").onclick = () => { photoTarget = "buscar"; $("fileIn").click(); };
+$("fileIn").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  if (photoTarget === "ai") return readLabel(f);
+  toast("Leyendo código…");
+  const code = await decodeImage(f).catch(() => null);
+  if (!code) return toast("No se encontró un código. Acercate y enfocá mejor.");
+  beep(); photoTarget === "reg" ? fillCode(code) : lookup(code);
+};
+
+/* ---------- register / edit ---------- */
+function show(tab){
+  for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === tab);
+  for (const t of ["buscar","registrar","lista"]) $("tab-" + t).hidden = t !== tab;
+  if (stream) stopCam();
+  if (tab === "buscar") $("findCode").focus();
+}
+for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(b.dataset.tab);
+function fillCode(code){
+  $("fCode").value = code; const it = items.get(keyOf(code));
+  if (it) { $("fName").value = it.name; $("fPrice").value = it.price; }
+  syncReg(); $(it ? "fPrice" : "fName").focus();
+}
+function edit(it){ show("registrar"); $("fCode").value = it.code || ""; $("fName").value = it.name || ""; $("fPrice").value = it.price ?? ""; syncReg(); $(it.name ? "fPrice" : "fName").focus(); }
+function syncReg(){
+  if (readOnly) return;
+  const it = items.get(keyOf($("fCode").value || " "));
+  $("delBtn").hidden = !it; $("delBtn").textContent = "Eliminar"; delete $("delBtn").dataset.armed;
+  $("regInfo").textContent = it ? `Ya registrado: ${fmt(it.price)}. Guardar reemplaza el precio.` : "";
+}
+$("fCode").oninput = syncReg;
+$("regCamBtn").onclick = () => stream ? stopCam() : startCam("slotReg", c => { fillCode(c); stopCam(); });
+$("clearBtn").onclick = () => { $("regForm").reset(); syncReg(); $("fCode").focus(); };
+$("regForm").onsubmit = async e => {
+  e.preventDefault();
+  const price = Number($("fPrice").value.replace(/[₡\s]/g, "").replace(",", "."));
+  if (!(price >= 0)) return toast("Precio inválido");
+  const item = {code: $("fCode").value.trim(), name: $("fName").value.trim().toUpperCase(), price, updatedAt: new Date().toISOString()};
+  try { await put(item); toast("Guardado: " + fmt(price)); shown = item.code; refreshResult(); $("regForm").reset(); syncReg(); $("fCode").focus(); }
+  catch (err) { toast("No se pudo guardar (" + (err.code || err.message) + ")"); }
+};
+$("delBtn").onclick = async () => {
+  const b = $("delBtn");
+  if (!b.dataset.armed) { b.dataset.armed = 1; b.textContent = "Tocá otra vez para eliminar"; return; }
+  try { await del($("fCode").value); toast("Eliminado"); $("regForm").reset(); syncReg(); } catch (err) { toast("No se pudo eliminar (" + (err.code || err.message) + ")"); }
+};
+
+/* ---------- AI label reading: photo of the shelf label -> code, name, price ---------- */
+let sample = null;
+async function readLabel(file){
+  toast("Leyendo etiqueta…");
+  try {
+    const r = await sample.json('Esta foto es una etiqueta de precio de góndola de supermercado (Costa Rica). Devolvé SOLO JSON {"codigo": string, "descripcion": string, "precio": number}. "codigo" es el número de código de barras impreso (dígitos), "precio" el precio en colones sin símbolo. Si un campo no se ve, usá "".', {images: [file], modelTier: "quick"});
+    if (r.codigo) $("fCode").value = String(r.codigo);
+    if (r.descripcion) $("fName").value = String(r.descripcion).toUpperCase();
+    if (r.precio !== "" && r.precio != null) $("fPrice").value = r.precio;
+    syncReg(); toast("Revisá los datos y guardá");
+  } catch (e) { toast(e.code === "not_granted" ? "Permiso denegado para la IA" : "No se pudo leer la etiqueta"); }
+}
+$("aiBtn").onclick = () => { photoTarget = "ai"; $("fileIn").click(); };
+
+/* ---------- list ---------- */
+function render(){
+  const q = $("filter").value.trim().toUpperCase(); const ul = $("list"); ul.innerHTML = "";
+  const all = [...items.values()].sort((a,b) => a.name.localeCompare(b.name));
+  const rows = q ? all.filter(it => it.name.includes(q) || String(it.code).includes(q)) : all;
+  $("count").textContent = items.size ? `${rows.length} de ${items.size} productos` : "Todavía no hay productos. Registrá el primero en «Registrar».";
+  for (const it of rows.slice(0, 300)) {
+    const li = document.createElement("li"); li.tabIndex = 0;
+    li.innerHTML = '<span class="nm"></span><span class="pr"></span><span class="cd"></span>';
+    li.children[0].textContent = it.name; li.children[1].textContent = fmt(it.price); li.children[2].textContent = it.code;
+    li.onclick = li.onkeydown = e => { if (e.type === "click" || e.key === "Enter") edit(it); };
+    ul.append(li);
+  }
+}
+$("filter").oninput = render;
+
+refreshResult();
+initStore();
+(async () => {
+  sample = window.claude?.use ? await window.claude.use("sample").catch(() => null) : null;
+  if (sample && (await sample.limits().catch(() => ({}))).images) $("aiBtn").hidden = false;
+})();
+</script>
