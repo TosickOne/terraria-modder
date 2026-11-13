@@ -125,7 +125,13 @@ h2{font-size:16px;font-weight:800;margin:8px 0 0}
   </section>
 
   <section id="tab-lista" hidden>
-    <input id="filter" placeholder="Filtrar por nombre o código" aria-label="Filtrar productos">
+    <div class="row">
+      <input id="filter" placeholder="Filtrar por nombre o código" aria-label="Filtrar productos">
+      <select id="sortBy" class="btn" style="flex:0 0 auto" aria-label="Ordenar lista">
+        <option value="recent">Recientes</option>
+        <option value="tipo">Por tipo</option>
+      </select>
+    </div>
     <p class="hint" id="count"></p>
     <ul class="list" id="list"></ul>
   </section>
@@ -266,6 +272,51 @@ let shown = null;
 function lookup(code){
   code = String(code).trim(); if (!code) return;
   shown = code; $("findCode").value = code; refreshResult();
+  // Remember the scan for the "Recientes" list; at most one write a minute per product.
+  const k = keyOf(code), it = items.get(k), now = Date.now();
+  if (it && !readOnly && !(now - new Date(it.lastScan || 0) < 6e4)) write(k, {...it, lastScan: new Date(now).toISOString()}).catch(() => {});
+}
+
+/* ---------- reference price from Maxi Palí's public catalog, through the viewer's TinyFish connector ---------- */
+let mcp = null; const refCache = new Map();
+// The catalog stores UPC-A (12 digits) as EAN-13 with a leading 0.
+const refEan = c => { c = String(c).trim(); return /^\d{8,14}$/.test(c) ? (c.length === 12 ? "0" + c : c) : null; };
+// shortcut: TinyFish flattens the API's JSON into text, so fields are pulled by regex; switch to a JSON-preserving fetcher if one becomes available.
+function parseRef(text){
+  const t = String(text).replace(/\\"/g, '"').replace(/\\_/g, "_");
+  const price = Number((t.match(/"Price":\s*([\d.]+)/) || [])[1]);
+  if (!(price > 0)) return null;
+  const name = (t.match(/"productName":"([^"]+)"/) || t.match(/\n([^\n"]+?)\s*",\s*"ean"/) || [])[1] || "";
+  const tipo = (t.match(/"categories":\["\/([^/"]+)\//) || [])[1] || "";
+  return {price, name: name.trim(), tipo};
+}
+console.assert(parseRef('Desc\nSnack para perro - 6 oz\n\n\\",\\"ean\\":\\"0038100171207\\",\\"Price\\":1700.0,')?.price === 1700 && parseRef("[]") === null, "parseRef");
+console.assert(parseRef('Desc\nSnack para perro - 6 oz\n\n\\",\\"ean\\":\\"0038100171207\\",\\"Price\\":1700.0,').name === "Snack para perro - 6 oz", "parseRef name");
+function refLookup(code){
+  const ean = refEan(code); if (!mcp || !ean) return Promise.resolve(null);
+  if (!refCache.has(ean)) refCache.set(ean, mcp.callTool("TinyFish", "fetch_content",
+      {urls: ["https://www.maxipali.co.cr/api/catalog_system/pub/products/search?fq=alternateIds_Ean:" + ean], format: "markdown", links: false, image_links: false, iframe_links: false, page_metadata: false, ttl: 86400},
+      {cache: {staleTime: 864e5, gcTime: 864e5}})
+    .then(r => { const res = r.payload?.results?.[0]; return res ? parseRef(res.text) : null; })
+    .catch(() => { refCache.delete(ean); return null; })); // failures retry on the next scan
+  return refCache.get(ean);
+}
+function refLine(card, code, it, regBtn){
+  if (!mcp || !refEan(code)) return;
+  const el = document.createElement("div"); el.className = "hint"; el.textContent = "Maxi Palí: buscando…"; card.append(el);
+  refLookup(code).then(x => {
+    if (!x) return el.textContent = "Maxi Palí: no lo tiene en su catálogo en línea.";
+    const d = it ? it.price - x.price : 0;
+    el.textContent = `Referencia Maxi Palí: ${fmt(x.price)}` + (it && d ? ` · aquí ${fmt(Math.abs(d))} más ${d > 0 ? "caro" : "barato"}` : "") + (x.name ? ` · ${x.name}` : "");
+    if (regBtn) regBtn.onclick = () => edit({code, name: x.name.toUpperCase(), tipo: x.tipo, price: x.price});
+  });
+}
+async function prefillRef(){
+  const code = $("fCode").value.trim(); if ($("fName").value || items.has(keyOf(code || " "))) return;
+  const x = await refLookup(code);
+  if (!x || $("fCode").value.trim() !== code || $("fName").value) return;
+  $("fName").value = x.name.toUpperCase(); if (!$("fTipo").value) $("fTipo").value = x.tipo; $("fPrice").value = x.price;
+  $("regInfo").textContent = "Datos de referencia de Maxi Palí: confirmá el precio en caja.";
 }
 function refreshResult(){
   if (!shown) { $("result").innerHTML = '<p class="hint">Escaneá un código con la cámara, tomá una foto, o escribilo. Un lector de códigos USB/Bluetooth también funciona: escaneá con el cursor en la casilla.</p>'; return; }
@@ -275,11 +326,13 @@ function refreshResult(){
     card.innerHTML = '<div class="c"><span></span><span class="pill bad">No registrado</span></div><div class="n">Sin precio registrado</div>';
     card.querySelector(".c span").textContent = shown;
     const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Registrar este código";
-    b.onclick = () => edit({code: shown}); card.append(b);
+    b.onclick = () => edit({code: shown}); refLine(card, shown, null, b); card.append(b);
   } else {
     const days = Math.floor((Date.now() - new Date(it.updatedAt)) / 864e5);
     card.innerHTML = `<div class="c"><span></span><span class="pill ${days > 30 ? "warn" : "ok"}">${days === 0 ? "actualizado hoy" : "hace " + days + " d"}</span></div><div class="n"></div><div class="p"></div>`;
+    if (it.fuente === "ref") card.querySelector(".c").insertAdjacentHTML("beforeend", '<span class="pill warn">sin confirmar en caja</span>');
     card.querySelector(".c span").textContent = it.code; card.querySelector(".n").textContent = it.name; card.querySelector(".p").textContent = fmt(it.price);
+    refLine(card, it.code, it);
     const b = document.createElement("button"); b.className = "btn"; b.textContent = "Editar precio"; b.onclick = () => edit(it); card.append(b);
   }
   r.append(card);
@@ -311,7 +364,7 @@ for (const b of document.querySelectorAll("nav button")) b.onclick = () => show(
 function fillCode(code){
   $("fCode").value = code; const it = items.get(keyOf(code));
   if (it) { $("fName").value = it.name; $("fPrice").value = it.price; $("fTipo").value = it.tipo || ""; }
-  syncReg(); $(it ? "fPrice" : "fName").focus();
+  syncReg(); $(it ? "fPrice" : "fName").focus(); prefillRef();
 }
 function edit(it){ show("registrar"); $("fCode").value = it.code || ""; $("fName").value = it.name || ""; $("fTipo").value = it.tipo || ""; $("fPrice").value = it.price ?? ""; syncReg(); $(it.name ? "fPrice" : "fName").focus(); }
 function syncReg(){
@@ -321,6 +374,7 @@ function syncReg(){
   $("regInfo").textContent = it ? `Ya registrado: ${fmt(it.price)}. Guardar reemplaza el precio.` : "";
 }
 $("fCode").oninput = syncReg;
+$("fCode").onchange = prefillRef;
 $("regCamBtn").onclick = () => stream ? stopCam() : startCam("slotReg", c => { fillCode(c); stopCam(); });
 $("clearBtn").onclick = () => { $("regForm").reset(); syncReg(); $("fCode").focus(); };
 $("regForm").onsubmit = async e => {
@@ -328,7 +382,10 @@ $("regForm").onsubmit = async e => {
   const price = Number($("fPrice").value.replace(/[₡\s]/g, "").replace(",", "."));
   if (!(price > 0)) return toast("El precio tiene que ser mayor que 0");
   const tipo = $("fTipo").value.trim(); const t = tipos().find(x => x.toLowerCase() === tipo.toLowerCase()); // reuse existing spelling
-  const item = {code: $("fCode").value.trim(), name: $("fName").value.trim().toUpperCase(), tipo: t || tipo, price, updatedAt: new Date().toISOString()};
+  const code = $("fCode").value.trim(), old = items.get(keyOf(code)), ref = await refLookup(code);
+  // fuente: "ref" = copied from Maxi Palí and not yet confirmed at the till; an unchanged price keeps its previous source.
+  const fuente = old && Number(old.price) === price ? old.fuente || "manual" : ref && ref.price === price ? "ref" : "manual";
+  const item = {...old, code, name: $("fName").value.trim().toUpperCase(), tipo: t || tipo, price, fuente, updatedAt: new Date().toISOString()};
   try { await put(item); toast("Guardado: " + fmt(price)); shown = item.code; refreshResult(); $("regForm").reset(); syncReg(); $("fCode").focus(); }
   catch (err) { toast("No se pudo guardar (" + (err.code || err.message) + ")"); }
 };
@@ -356,20 +413,32 @@ $("aiBtn").onclick = () => { photoTarget = "ai"; $("fileIn").click(); };
 /* ---------- list ---------- */
 function render(){
   const q = $("filter").value.trim().toUpperCase(); const ul = $("list"); ul.innerHTML = "";
-  const rows = sorted().filter(it => !q || it.name.includes(q) || String(it.code).includes(q) || tipoOf(it).toUpperCase().includes(q));
+  const recent = $("sortBy").value === "recent";
+  const rows = (recent ? byRecent() : sorted()).filter(it => !q || it.name.includes(q) || String(it.code).includes(q) || tipoOf(it).toUpperCase().includes(q));
   $("count").textContent = items.size ? `${rows.length} de ${items.size} productos` : "Todavía no hay productos. Registrá el primero en «Registrar».";
   $("tipos").innerHTML = ""; for (const t of tipos()) $("tipos").append(new Option(t));
   let grp = null;
   for (const it of rows.slice(0, 300)) {
-    if (tipoOf(it) !== grp) { grp = tipoOf(it); const h = document.createElement("li"); h.className = "grp"; h.textContent = grp; ul.append(h); }
+    const g = recent ? dayLabel(lastTouch(it)) : tipoOf(it);
+    if (g !== grp) { grp = g; const h = document.createElement("li"); h.className = "grp"; h.textContent = grp; ul.append(h); }
     const li = document.createElement("li"); li.tabIndex = 0;
     li.innerHTML = '<span class="nm"></span><span class="pr"></span><span class="cd"></span>';
-    li.children[0].textContent = it.name; li.children[1].textContent = fmt(it.price); li.children[2].textContent = it.code;
+    const when = recent ? ` · ${it.lastScan && it.lastScan >= it.updatedAt ? "escaneado" : "guardado"} ${new Date(lastTouch(it)).toLocaleTimeString("es-CR", {hour: "2-digit", minute: "2-digit"})}` : "";
+    li.children[0].textContent = it.name; li.children[1].textContent = fmt(it.price); li.children[2].textContent = it.code + when + (it.fuente === "ref" ? " · referencia" : "");
     li.onclick = li.onkeydown = e => { if (e.type === "click" || e.key === "Enter") edit(it); };
     ul.append(li);
   }
 }
 $("filter").oninput = render;
+try { $("sortBy").value = localStorage.getItem("orden") || "recent"; } catch {}
+$("sortBy").onchange = () => { try { localStorage.setItem("orden", $("sortBy").value); } catch {} render(); };
+const lastTouch = it => [it.lastScan, it.updatedAt].filter(Boolean).sort().at(-1) || "";
+const byRecent = () => [...items.values()].sort((a,b) => lastTouch(b).localeCompare(lastTouch(a)));
+function dayLabel(iso){
+  if (!iso) return "Sin fecha";
+  const d = new Date(iso), days = Math.round((new Date().setHours(0,0,0,0) - new Date(iso).setHours(0,0,0,0)) / 864e5);
+  return days === 0 ? "Hoy" : days === 1 ? "Ayer" : d.toLocaleDateString("es-CR", {weekday: "long", day: "numeric", month: "short"});
+}
 const tipoOf = it => it.tipo || "Sin tipo";
 const tipos = () => [...new Set([...items.values()].map(it => it.tipo).filter(Boolean))].sort((a,b) => a.localeCompare(b));
 const sorted = () => [...items.values()].sort((a,b) => (a.tipo ? 0 : 1) - (b.tipo ? 0 : 1) || tipoOf(a).localeCompare(tipoOf(b)) || a.name.localeCompare(b.name));
@@ -471,7 +540,7 @@ function renderDiff(lines){
   table("Precios a corregir", changed, "chg");
   table("No están en la lista", missing, "new");
   table("Correctos", same, "ok");
-  if (!changed.length && !missing.some(r => r.l.codigo)) return;
+  if (!changed.length && !missing.some(r => r.l.codigo) && !same.some(r => r.it.fuente === "ref")) return;
   const btn = document.createElement("button"); btn.className = "btn primary"; btn.textContent = "Aplicar seleccionados";
   btn.onclick = async () => {
     btn.disabled = true; let n = 0;
@@ -480,9 +549,11 @@ function renderDiff(lines){
       for (const r of [...changed, ...missing]) {
         if (!r.cb?.checked) continue;
         const now = new Date().toISOString();
-        await put(r.it ? {...r.it, price: r.price, updatedAt: now} : {code: String(r.l.codigo), name: String(r.l.descripcion || r.l.codigo).toUpperCase(), tipo: "", price: r.price, updatedAt: now});
+        await put(r.it ? {...r.it, price: r.price, fuente: "caja", updatedAt: now} : {code: String(r.l.codigo), name: String(r.l.descripcion || r.l.codigo).toUpperCase(), tipo: "", price: r.price, fuente: "caja", updatedAt: now});
         n++;
       }
+      // Reference prices the till just confirmed are no longer "sin confirmar".
+      for (const r of same) if (r.it.fuente === "ref") { await put({...r.it, fuente: "caja", updatedAt: new Date().toISOString()}); n++; }
       toast(`${n} productos actualizados`); out.innerHTML = ""; valPhotos = []; syncVal();
     } catch (err) { toast(`Se guardaron ${n}; falló el resto (${err.code || err.message})`); btn.disabled = false; }
     finally { if (undoGroup.entries.length) { undoGroup.label = `corrección de ${n} producto${n === 1 ? "" : "s"}`; undoStack.push(undoGroup); } undoGroup = null; syncUndo(); }
@@ -493,6 +564,8 @@ function renderDiff(lines){
 refreshResult();
 initStore();
 (async () => {
+  mcp = window.claude?.use ? await window.claude.use("mcp").catch(() => null) : null;
+  if (mcp) refreshResult();
   sample = window.claude?.use ? await window.claude.use("sample").catch(() => null) : null;
   const ai = sample && (await sample.limits().catch(() => ({}))).images;
   $("aiBtn").hidden = !ai; $("valBtn").disabled = !ai;
