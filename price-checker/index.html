@@ -277,37 +277,48 @@ function lookup(code){
   if (it && !readOnly && !(now - new Date(it.lastScan || 0) < 6e4)) write(k, {...it, lastScan: new Date(now).toISOString()}).catch(() => {});
 }
 
-/* ---------- reference price from Maxi Palí's public catalog, through the viewer's TinyFish connector ---------- */
+/* ---------- reference prices from Costa Rican supermarkets' public catalogs, through the viewer's TinyFish connector ---------- */
 let mcp = null; const refCache = new Map();
-// The catalog stores UPC-A (12 digits) as EAN-13 with a leading 0.
+// Walmart CR's chains share one public catalog API; Palí and Auto Mercado have no public API, PriceSmart none for CR.
+const STORES = {"www.maxipali.co.cr": "Maxi Palí", "www.walmart.co.cr": "Walmart", "www.masxmenos.cr": "Más x Menos"};
+// The catalogs store UPC-A (12 digits) as EAN-13 with a leading 0.
 const refEan = c => { c = String(c).trim(); return /^\d{8,14}$/.test(c) ? (c.length === 12 ? "0" + c : c) : null; };
 // shortcut: TinyFish flattens the API's JSON into text, so fields are pulled by regex; switch to a JSON-preserving fetcher if one becomes available.
 function parseRef(text){
   const t = String(text).replace(/\\"/g, '"').replace(/\\_/g, "_");
   const price = Number((t.match(/"Price":\s*([\d.]+)/) || [])[1]);
-  if (!(price > 0)) return null;
+  if (!(price > 0)) return null; // the catalogs report 0 for out-of-stock items
   const name = (t.match(/"productName":"([^"]+)"/) || t.match(/\n([^\n"]+?)\s*",\s*"ean"/) || [])[1] || "";
   const tipo = (t.match(/"categories":\["\/([^/"]+)\//) || [])[1] || "";
   return {price, name: name.trim(), tipo};
 }
 console.assert(parseRef('Desc\nSnack para perro - 6 oz\n\n\\",\\"ean\\":\\"0038100171207\\",\\"Price\\":1700.0,')?.price === 1700 && parseRef("[]") === null, "parseRef");
 console.assert(parseRef('Desc\nSnack para perro - 6 oz\n\n\\",\\"ean\\":\\"0038100171207\\",\\"Price\\":1700.0,').name === "Snack para perro - 6 oz", "parseRef name");
+// Suggested price = lower median of the stores that have it: one outlier store can't drag it.
+const suggest = prices => [...prices].sort((a,b) => a - b)[Math.floor((prices.length - 1) / 2)];
+console.assert(suggest([1720, 1700, 1700]) === 1700 && suggest([650, 840]) === 650 && suggest([990]) === 990, "suggest");
 function refLookup(code){
   const ean = refEan(code); if (!mcp || !ean) return Promise.resolve(null);
   if (!refCache.has(ean)) refCache.set(ean, mcp.callTool("TinyFish", "fetch_content",
-      {urls: ["https://www.maxipali.co.cr/api/catalog_system/pub/products/search?fq=alternateIds_Ean:" + ean], format: "markdown", links: false, image_links: false, iframe_links: false, page_metadata: false, ttl: 86400},
+      {urls: Object.keys(STORES).map(h => `https://${h}/api/catalog_system/pub/products/search?fq=alternateIds_Ean:${ean}`), format: "markdown", links: false, image_links: false, iframe_links: false, page_metadata: false, ttl: 86400},
       {cache: {staleTime: 864e5, gcTime: 864e5}})
-    .then(r => { const res = r.payload?.results?.[0]; return res ? parseRef(res.text) : null; })
+    .then(r => {
+      const stores = (r.payload?.results || []).map(res => ({store: STORES[new URL(res.url).hostname], ...parseRef(res.text)})).filter(s => s.store && s.price > 0);
+      if (!stores.length) return null;
+      const named = stores.find(s => s.name) || stores[0];
+      return {price: suggest(stores.map(s => s.price)), name: named.name || "", tipo: named.tipo || "", stores};
+    })
     .catch(() => { refCache.delete(ean); return null; })); // failures retry on the next scan
   return refCache.get(ean);
 }
 function refLine(card, code, it, regBtn){
   if (!mcp || !refEan(code)) return;
-  const el = document.createElement("div"); el.className = "hint"; el.textContent = "Maxi Palí: buscando…"; card.append(el);
+  const el = document.createElement("div"); el.className = "hint"; el.textContent = "Buscando precios en otros súper…"; card.append(el);
   refLookup(code).then(x => {
-    if (!x) return el.textContent = "Maxi Palí: no lo tiene en su catálogo en línea.";
+    if (!x) return el.textContent = "Ningún súper lo tiene en su catálogo en línea (Maxi Palí, Walmart, Más x Menos).";
     const d = it ? it.price - x.price : 0;
-    el.textContent = `Referencia Maxi Palí: ${fmt(x.price)}` + (it && d ? ` · aquí ${fmt(Math.abs(d))} más ${d > 0 ? "caro" : "barato"}` : "") + (x.name ? ` · ${x.name}` : "");
+    el.textContent = `Sugerido ${fmt(x.price)}` + (it && d ? ` · aquí ${fmt(Math.abs(d))} más ${d > 0 ? "caro" : "barato"}` : "")
+      + " · " + x.stores.map(s => `${s.store} ${fmt(s.price)}`).join(" · ") + (x.name ? ` · ${x.name}` : "");
     if (regBtn) regBtn.onclick = () => edit({code, name: x.name.toUpperCase(), tipo: x.tipo, price: x.price});
   });
 }
@@ -316,7 +327,7 @@ async function prefillRef(){
   const x = await refLookup(code);
   if (!x || $("fCode").value.trim() !== code || $("fName").value) return;
   $("fName").value = x.name.toUpperCase(); if (!$("fTipo").value) $("fTipo").value = x.tipo; $("fPrice").value = x.price;
-  $("regInfo").textContent = "Datos de referencia de Maxi Palí: confirmá el precio en caja.";
+  $("regInfo").textContent = "Precio sugerido de " + x.stores.map(s => `${s.store} ${fmt(s.price)}`).join(", ") + ": confirmalo en caja.";
 }
 function refreshResult(){
   if (!shown) { $("result").innerHTML = '<p class="hint">Escaneá un código con la cámara, tomá una foto, o escribilo. Un lector de códigos USB/Bluetooth también funciona: escaneá con el cursor en la casilla.</p>'; return; }
